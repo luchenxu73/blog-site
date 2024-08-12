@@ -11,7 +11,7 @@ categories:
 tags:
   - stm32
   - openocd
-url: "demo/shortcodes.html"
+
 ---
 
 STM32H7系列OpenOCD+Clion开发xxxxxxxxxxxxxx
