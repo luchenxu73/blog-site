@@ -10,9 +10,7 @@ categories:
   - 示例文章
 
 tags:
-  - 图像
-  - 相册
-  - 浏览
+  - 示例
 
 url: "demo/image-viewer.html"
 toc: false

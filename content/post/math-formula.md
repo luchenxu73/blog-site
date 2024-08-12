@@ -7,13 +7,9 @@ date: 2022-09-11T10:16:02+08:00
 lastmod: 2022-09-11T10:16:02+08:00
 
 categories:
-  - 第三方引入
-  - 数学公式
+  - 示例文章
 tags:
-  - 数学公式
-  - mathjax
-  - katex
-
+  - 示例
 
 url: "demo/math-formula.html"
 math: mathjax

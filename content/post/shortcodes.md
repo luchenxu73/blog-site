@@ -8,10 +8,8 @@ lastmod: 2022-08-06T14:41:50+08:00
 
 categories:
   - 示例文章
-  - 语法
 tags:
-  - 短代码
-  - 语法
+  - 示例
 url: "demo/shortcodes.html"
 ---
 

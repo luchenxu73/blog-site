@@ -10,9 +10,7 @@ categories:
   - 示例文章
 
 tags:
-  - 自定义
-  - 个性化
-  - 布局
+  - 示例
 
 url: "demo/custom-files.html"
 toc: true
