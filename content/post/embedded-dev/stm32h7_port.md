@@ -24,7 +24,6 @@ STM32h7系列在Clion环境下的搭建
 
 ## LD文件基本分析
 
-### 基本的内存模型
 在进入LD文件的分析前，我们首先需要知道一些基本的知识：
 - 栈和堆的内存增长方向是什么？
 - 局部变量、全局变量有什么区别？它们还有别的分类方式吗？或者说你是否知道`BSS`、`Data`这些概念。
@@ -55,8 +54,152 @@ MEMORY
 }
 ```
 
-这一段代码里已经包含了不少信息。首先是`MEMORY`字段里分别对应了芯片的编址区域，`ORIGIN` 又显然是对应区域的起始位置。同时，我们从 `_estack` 可以看出，栈的高地址在DTCMRAM的末尾，又根据栈从高地址向低地址增长的特点，我们又明白栈应该是从DTCMRAM的末尾忘DTCMRAM的高出增长。
+这一段代码里已经包含了不少信息。首先是`MEMORY`字段里分别对应了芯片的编址区域，`ORIGIN` 又显然是对应区域的起始位置。同时，我们从 `_estack` 可以看出，栈的高地址在DTCMRAM的末尾，又根据栈从高地址向低地址增长的特点，我们又明白栈应该是从DTCMRAM的末尾忘DTCMRAM的高处增长。
+
+接下来我们来看`Section`部分。我们重点关注一些段:
+
+```c
+.text :
+{
+    . = ALIGN(4);
+    *(.text)           /* .text sections (code) */
+    *(.text*)          /* .text* sections (code) */
+    *(.glue_7)         /* glue arm to thumb code */
+    *(.glue_7t)        /* glue thumb to arm code */
+    *(.eh_frame)
+    KEEP (*(.init))
+    KEEP (*(.fini))
+    . = ALIGN(4);
+    _etext = .;        /* define a global symbols at end of code */
+} >FLASH
+```
+
+这个text部分就是我们的code部分保存的位置，这些指令都保存在flash中。程序在执行时直接从flash加载指令。尾部的`>FLASH`就是对应上文`MEMORY`里的内容。对于H7系列，有一个ITCM可以专门保存指令，它与CPU直连，但是在这个链接文件里我们可以发现所有的text都被放到了flash里，因为里面有匹配规则`*(.text*)`和`*(.text*)`。具体我们可以看编译生成的map文件,以`HAL_Init`函数为例，在map文件里搜索，发现生成`.text.HAL_Init`，对应的地址就在flash的编址区域里。那么如果希望把一些函数放到ITCM里，我们需要单独处理，也就是需要在ld文件里开一个新的段，然后把对应的函数名匹配到这个段里。同时因为ram的断电丢数据的特殊性，我们还要再把这些指令拷贝到ram里。
+
+
+
+接下来我们看data段：
+
+```c
+/* used by the startup to initialize data */
+_sidata = LOADADDR(.data);
+
+/* Initialized data sections goes into RAM, load LMA copy after code */
+.data : 
+{
+    . = ALIGN(4);
+    _sdata = .;        /* create a global symbol at data start */
+    *(.data)           /* .data sections */
+    *(.data*)          /* .data* sections */
+    . = ALIGN(4);
+    _edata = .;        /* define a global symbol at data end */
+} >DTCMRAM AT> FLASH
+
+```
+
+这个data段里保存的就是初始化值不为0的数据，当然它不包括局部变量，因为局部变量在栈上。需要注意的是，初始化值不为0的数据需要在flash中保存，再拷贝到ram的data段里。因为ram断电丢数据，丢完程序已经不知道你初始化值到底多少了，因此一定要在flash上记录这些值是多少。拷贝这一过程我们需要结合`startup_stm32h7b0xx.s`启动文件来看：
+
+```assembly
+Reset_Handler:
+  ldr   sp, =_estack      /* set stack pointer */
+
+/* Call the clock system initialization function.*/
+  bl  SystemInit
+
+/* Copy the data segment initializers from flash to SRAM */
+  ldr r0, =_sdata
+  ldr r1, =_edata
+  ldr r2, =_sidata
+  movs r3, #0
+  b LoopCopyDataInit
+
+CopyDataInit:
+  ldr r4, [r2, r3]
+  str r4, [r0, r3]
+  adds r3, r3, #4
+
+LoopCopyDataInit:
+  adds r4, r0, r3
+  cmp r4, r1
+  bcc CopyDataInit
+```
+
+我们可以看到`Reset_Handler`就是程序的入口，对应ld文件里的ENTRY。进入`Reset_Handler`后我们首先加载栈地址，然后调用`SystemInit`，然后就开始了拷贝data段。`_sdata`和`_edata` 分别对应了data段的开始和结束，我们能在上文ld文件的data段里找到对应的变量名。然后`_sidata`就是在flash里data段的开始处。CopyDataInit的任务就是把`_sidata`处的内容开始，一直拷贝到`_sdata`处，需要拷贝的长度自然就是`_edata`减去`_sdata`。我们看到`r3`寄存器每次递增4，也就是offset，循环拷贝，直到r0+r3==r1为止。读者可以自行琢磨这段汇编代码。从这里我们需要明白，**ld文件里的变量是能够使用的**，后续我们也会在ld文件里定义一些变量来供我们使用。
+
+
+
+接下来我们再看bss段：
+
+```c
+. = ALIGN(4);
+.bss :
+{
+  /* This is used by the startup in order to initialize the .bss secion */
+  _sbss = .;         /* define a global symbol at bss start */
+  __bss_start__ = _sbss;
+  *(.bss)
+  *(.bss*)
+  *(COMMON)
+  . = ALIGN(4);
+  _ebss = .;         /* define a global symbol at bss end */
+  __bss_end__ = _ebss;
+} >DTCMRAM
+```
+
+bss段是保存了未初始化的变量和初始化值为0的变量。因为这些变量只需简单地在内存里填充为0就行。同样也能在启动文件里发现对这片内存区域的处理：
+
+
+
+```assembly
+LoopCopyDataInit:
+  adds r4, r0, r3
+  cmp r4, r1
+  bcc CopyDataInit
+  
+  /* Zero fill the bss segment. */
+  ldr r2, =_sbss
+  ldr r4, =_ebss
+  movs r3, #0
+  b LoopFillZerobss
+  
+FillZerobss:
+  str  r3, [r2]
+  adds r2, r2, #4
+
+LoopFillZerobss:
+  cmp r2, r4
+  bcc FillZerobss
+```
+
+就在拷贝完data段后，就开始为bss段填充为0。`_sbss`和`_ebss`也同样能在ld文件中找到。
+
+接下来就是堆，也到了文件的末尾：
+
+```c
+._user_heap_stack :
+{
+  . = ALIGN(8);
+  PROVIDE ( end = . );
+  PROVIDE ( _end = . );
+  . = . + _Min_Heap_Size;
+  . = . + _Min_Stack_Size;
+  . = ALIGN(8);
+} >DTCMRAM
+```
+
+堆从低地址向高地址增长，那么在此处我们可以看到，堆如果一直增长，那就会和栈撞上（栈从前面可知，从DTCMRAM的尾部向低地址增长）。根据该链接文件，我们判断是否超内存的方法就是从堆空间的起始地址处开始，加上堆和栈的大小，总和如果大于DTCMRAM的尾部，那么就说明内存不够了。
+
+ld文件的简单剖析到此为止，接下来我们来实现一些典型的应用，例如：
+
+1. 将大缓冲数组开辟到另一处ram
+2. 将代码放到ITCM
+3. 开辟一个新的内存管理区域
 
 ## 如何将代码放入ITCM
 
-## DTCM/RAM区域使用
+从上面map文件的分析里看到，我们的函数都会编译成text前缀的玩意儿。例如`HAL_Init`函数，在map文件里，可以看到它变成了`.text.HAL_Init`。
+
+## 放置变量到其他RAM区域
+
+
+
